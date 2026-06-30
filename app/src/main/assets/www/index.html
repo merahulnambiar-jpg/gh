@@ -249,7 +249,10 @@
     padding:7px 14px; border-radius:5px;
     display:none;
   }
-  .map-wrap{ position:relative; height:100%; }
+  .map-wrap{ position:relative; }
+  @media (min-width: 881px){
+    .map-wrap{ height:100%; }
+  }
 
   .overlay{
     position:fixed; inset:0; background:rgba(19,35,31,0.55);
