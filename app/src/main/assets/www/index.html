@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Waypoint Run — Route Planner</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+  :root{
+    --ink:#13231f;
+    --paper:#f4f2ea;
+    --panel:#ffffff;
+    --line:#dcd6c5;
+    --teal:#1f5f54;
+    --teal-deep:#143d36;
+    --amber:#c97a2b;
+    --amber-soft:#f0d9b8;
+    --muted:#6b6357;
+    --danger:#a13b2c;
+    --done:#3b6d11;
+    --done-soft:#e3edd5;
+    --mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    font-family: Georgia, 'Iowan Old Style', serif;
+    background:var(--paper);
+    color:var(--ink);
+    display:flex;
+    flex-direction:column;
+  }
+  header{
+    padding:18px 22px 14px;
+    border-bottom:2px solid var(--ink);
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+  header .brand{
+    display:flex;
+    align-items:baseline;
+    gap:10px;
+  }
+  header h1{
+    font-size:1.4rem;
+    margin:0;
+    letter-spacing:0.3px;
+  }
+  header .tag{
+    font-family: var(--mono);
+    font-size:0.68rem;
+    text-transform:uppercase;
+    letter-spacing:1.5px;
+    color:var(--muted);
+    border:1px solid var(--line);
+    padding:3px 8px;
+    border-radius:3px;
+    background:var(--panel);
+  }
+  header .stat{
+    font-family: var(--mono);
+    font-size:0.78rem;
+    color:var(--teal-deep);
+  }
+  .layout{
+    flex:1;
+    display:grid;
+    grid-template-columns: 280px 1fr;
+    min-height:0;
+  }
+  @media (max-width: 880px){
+    .layout{
+      display:flex;
+      flex-direction:column;
+    }
+    .map-wrap{
+      order:-1;
+      flex-shrink:0;
+      height:40vh;
+      border-bottom:2px solid var(--ink);
+    }
+    .panel{
+      flex:1;
+      min-height:0;
+    }
+  }
+  .panel{
+    border-right:2px solid var(--ink);
+    background:var(--panel);
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+    overflow-y:auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .section{
+    padding:10px 14px;
+    border-bottom:1px solid var(--line);
+  }
+  .section h2{
+    font-family: var(--mono);
+    font-size:0.64rem;
+    text-transform:uppercase;
+    letter-spacing:1.2px;
+    color:var(--muted);
+    margin:0 0 6px;
+  }
+  .upload-zone{
+    border:1.5px dashed var(--teal);
+    border-radius:6px;
+    padding:8px 10px;
+    text-align:center;
+    background:#fbfaf5;
+  }
+  .upload-zone p{ margin:2px 0 6px; font-size:0.7rem; color:var(--muted); line-height:1.3; }
+  .upload-zone .hint{ font-family:var(--mono); font-size:0.58rem; color:var(--teal-deep); margin-top:6px; }
+  .upload-zone button.primary-upload{
+    width:100%;
+    padding:6px 10px;
+    font-size:0.68rem;
+  }
+  input[type=file]{ display:none; }
+  .row{ display:flex; gap:8px; margin-top:8px; }
+  button{
+    font-family: var(--mono);
+    font-size:0.74rem;
+    text-transform:uppercase;
+    letter-spacing:0.8px;
+    border:1px solid var(--ink);
+    background:var(--ink);
+    color:var(--paper);
+    padding:8px 12px;
+    border-radius:4px;
+    cursor:pointer;
+    transition: transform 0.1s, opacity 0.15s;
+  }
+  button:hover{ opacity:0.85; }
+  button:active{ transform: translateY(1px); }
+  button.secondary{
+    background:var(--panel);
+    color:var(--ink);
+  }
+  button:disabled{ opacity:0.4; cursor:not-allowed; }
+  .summary{
+    display:flex;
+    gap:14px;
+    font-family:var(--mono);
+    font-size:0.78rem;
+    flex-wrap:wrap;
+  }
+  .summary .num{ font-size:1.1rem; color:var(--teal-deep); font-weight:bold; display:block; }
+  .summary .lbl{ color:var(--muted); font-size:0.65rem; text-transform:uppercase; }
+  #stops{
+    flex:1;
+    overflow-y:auto;
+    -webkit-overflow-scrolling: touch;
+    padding:0;
+  }
+  .stop{
+    display:flex;
+    gap:8px;
+    padding:7px 12px;
+    border-bottom:1px solid var(--line);
+    align-items:flex-start;
+  }
+  .stop:hover{ background:#fbfaf5; }
+  .stop.visited{ background:var(--done-soft); }
+  .stop.next-suggested{ background: var(--amber-soft); }
+  .stop .badge{
+    width:18px; height:18px; min-width:18px;
+    border-radius:50%;
+    background:var(--teal);
+    color:white;
+    font-family:var(--mono);
+    font-size:0.62rem;
+    display:flex; align-items:center; justify-content:center;
+    margin-top:2px;
+  }
+  .stop.visited .badge{ background:var(--done); }
+  .stop .info{ flex:1; cursor:pointer; }
+  .stop .name{ font-weight:bold; font-size:0.76rem; line-height:1.25; }
+  .stop .name:hover{ text-decoration:underline; color:var(--teal-deep); }
+  .stop .meta{ font-family:var(--mono); font-size:0.58rem; color:var(--muted); margin-top:1px; }
+  .stop .data-preview{ font-family:var(--mono); font-size:0.56rem; color:var(--done); margin-top:2px; }
+  .stop .actions{ display:flex; flex-direction:column; gap:6px; align-items:center; }
+  .icon-btn{
+    background:var(--panel);
+    border:1px solid var(--line);
+    color:var(--teal-deep);
+    width:22px; height:22px;
+    border-radius:4px;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    font-size:0.72rem;
+    padding:0;
+  }
+  .icon-btn:hover{ background:var(--amber-soft); border-color:var(--amber); }
+  .list-end-spacer{ height:28px; }
+  .empty-state{
+    padding:30px 18px;
+    text-align:center;
+    color:var(--muted);
+    font-size:0.85rem;
+  }
+  #map{ width:100%; height:100%; }
+  .leaflet-div-icon{ background:transparent; border:none; }
+  .pin{
+    width:26px; height:26px;
+    border-radius:50% 50% 50% 0;
+    transform: rotate(-45deg);
+    background:var(--teal);
+    border:2px solid var(--paper);
+    box-shadow:0 1px 3px rgba(0,0,0,0.4);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .pin span{
+    transform: rotate(45deg);
+    color:white;
+    font-family:var(--mono);
+    font-size:0.65rem;
+    font-weight:bold;
+  }
+  .pin.visited{ background:var(--done); }
+  .pin.next{ background:var(--amber); }
+  .pin.start{ box-shadow:0 0 0 3px var(--amber), 0 1px 3px rgba(0,0,0,0.4); }
+  .pin.group{ border-radius:50%; transform:none; }
+  .pin.group span{ transform:none; }
+  .start-flag{
+    position:absolute; z-index:400; top:10px; right:10px;
+    background:var(--ink); color:var(--paper);
+    font-family:var(--mono); font-size:0.6rem; text-transform:uppercase; letter-spacing:1px;
+    padding:4px 8px; border-radius:4px;
+    display:flex; align-items:center; gap:5px;
+  }
+  .start-flag .dot{ width:7px; height:7px; border-radius:50%; background:var(--amber); }
+  .me-dot{
+    width:16px;height:16px;border-radius:50%;
+    background:#2a6fdb; border:3px solid white;
+    box-shadow:0 0 0 2px #2a6fdb, 0 1px 4px rgba(0,0,0,0.5);
+  }
+  .locate-banner{
+    position:absolute; z-index:500; top:10px; left:50%; transform:translateX(-50%);
+    background:var(--ink); color:var(--paper);
+    font-family:var(--mono); font-size:0.72rem;
+    padding:7px 14px; border-radius:5px;
+    display:none;
+  }
+  .map-wrap{ position:relative; height:100%; }
+
+  .overlay{
+    position:fixed; inset:0; background:rgba(19,35,31,0.55);
+    display:none; align-items:center; justify-content:center;
+    z-index:2000; padding:16px;
+  }
+  .overlay.show{ display:flex; }
+  .modal{
+    background:var(--panel);
+    border-radius:8px;
+    border:1px solid var(--ink);
+    max-width:380px;
+    width:100%;
+    max-height:80vh;
+    overflow-y:auto;
+    -webkit-overflow-scrolling: touch;
+    padding:18px;
+  }
+  .modal h3{
+    margin:0 0 4px;
+    font-size:1.05rem;
+  }
+  .modal .modal-meta{
+    font-family:var(--mono); font-size:0.7rem; color:var(--muted); margin-bottom:14px;
+  }
+  .modal textarea{
+    width:100%;
+    height:90px;
+    font-family:Georgia,serif;
+    font-size:0.85rem;
+    border:1px solid var(--line);
+    border-radius:4px;
+    padding:8px;
+    resize:vertical;
+    background:#fdfcf8;
+    margin-bottom:12px;
+  }
+  .modal .modal-actions{ display:flex; gap:8px; justify-content:flex-end; }
+  .group-list{ list-style:none; margin:0; padding:0; }
+  .group-list li{
+    display:flex; align-items:center; gap:8px;
+    padding:10px 8px;
+    border-bottom:1px solid var(--line);
+    cursor:pointer;
+  }
+  .group-list li:hover{ background:#fbfaf5; }
+  .group-list li .gdot{
+    width:9px; height:9px; border-radius:50%; background:var(--teal); min-width:9px;
+  }
+  .group-list li.gvisited .gdot{ background:var(--done); }
+  .group-list li .gname{ font-weight:bold; font-size:0.85rem; flex:1; }
+  .group-list li .gstatus{ font-family:var(--mono); font-size:0.65rem; color:var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>Waypoint Run</h1>
+    <span class="tag">route planner</span>
+  </div>
+  <div class="stat" id="headerStat">No data loaded</div>
+</header>
+
+<div class="layout">
+  <div class="panel">
+    <div class="section">
+      <h2>01 — Load points</h2>
+      <div class="upload-zone" id="dropZone">
+        <p>Upload an Excel file with name, lat, lng columns — or drag it here</p>
+        <button type="button" class="primary-upload" id="uploadBtn">Upload Excel file</button>
+        <div class="hint">Columns: name, lat, lng (first row = headers). .xlsx, .xls, or .csv</div>
+      </div>
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" />
+    </div>
+
+    <div class="section" id="summarySection" style="display:none;">
+      <h2>02 — Summary</h2>
+      <div class="summary">
+        <div><span class="num" id="sumStops">0</span><span class="lbl">Stops</span></div>
+        <div><span class="num" id="sumDist">0</span><span class="lbl">km total</span></div>
+        <div><span class="num" id="sumTime">0</span><span class="lbl">Est. time</span></div>
+        <div><span class="num" id="sumDone">0</span><span class="lbl">Visited</span></div>
+      </div>
+      <div class="row">
+        <button class="secondary" id="downloadAllBtn">Download all data (CSV)</button>
+      </div>
+    </div>
+
+    <div id="stops">
+      <div class="empty-state">Upload a list of locations to generate the shortest one-way route.</div>
+    </div>
+  </div>
+
+  <div class="map-wrap">
+    <div class="locate-banner" id="locateBanner">Locating you…</div>
+    <div class="start-flag" id="startFlag" style="display:none;"><span class="dot"></span><span id="startFlagText">Start</span></div>
+    <div id="map"></div>
+  </div>
+</div>
+
+<div class="overlay" id="dataOverlay">
+  <div class="modal">
+    <h3 id="dataModalTitle">Point name</h3>
+    <div class="modal-meta" id="dataModalMeta">lat, lng</div>
+    <label class="fieldlabel" for="dataModalText">Data / notes for this point</label>
+    <textarea id="dataModalText" placeholder="Enter readings, notes, confirmation details…"></textarea>
+    <div class="modal-actions">
+      <button class="secondary" id="dataModalCancel">Cancel</button>
+      <button id="dataModalUnvisit" class="secondary" style="display:none;">Mark not visited</button>
+      <button id="dataModalSave">Save &amp; mark visited</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="groupOverlay">
+  <div class="modal">
+    <h3>Multiple points here</h3>
+    <div class="modal-meta">Select which point to enter data for</div>
+    <ul class="group-list" id="groupList"></ul>
+    <div class="modal-actions">
+      <button class="secondary" id="groupModalCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+// ---------- State ----------
+let points = [];        // {name, lat, lng, visited, data, savedAt}
+let route = [];         // ordered array of indices into points
+let markers = [];       // leaflet markers, one per location group
+let groups = [];        // [{lat,lng,indices:[...]}]
+let routeLine = null;
+let nextLine = null;
+let userMarker = null;
+let userLatLng = null;
+let activeModalIdx = null;
+let map;
+
+const SAME_LOCATION_KM = 0.05; // ~50m threshold to treat points as "same location"
+const AVG_SPEED_KMH = 35;      // used for estimated travel time
+
+// ---------- Map init ----------
+map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+// ---------- Geolocation (live) ----------
+const locateBanner = document.getElementById('locateBanner');
+if ('geolocation' in navigator) {
+  locateBanner.style.display = 'block';
+  navigator.geolocation.watchPosition(pos => {
+    userLatLng = [pos.coords.latitude, pos.coords.longitude];
+    locateBanner.style.display = 'none';
+    updateUserMarker();
+    updateNearestSuggestion();
+  }, err => {
+    locateBanner.textContent = 'Location unavailable — enable GPS/location permission to see nearest-point guidance';
+  }, { enableHighAccuracy: true, maximumAge: 5000 });
+} else {
+  locateBanner.style.display = 'none';
+}
+
+function updateUserMarker(){
+  if (!userLatLng) return;
+  if (!userMarker){
+    const icon = L.divIcon({ className:'leaflet-div-icon', html:'<div class="me-dot"></div>', iconSize:[16,16] });
+    userMarker = L.marker(userLatLng, { icon, zIndexOffset: 1000 }).addTo(map).bindPopup('You are here');
+  } else {
+    userMarker.setLatLng(userLatLng);
+  }
+}
+
+// ---------- Distance helpers ----------
+function haversine(a, b){
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI/180;
+  const dLng = (b.lng - a.lng) * Math.PI/180;
+  const lat1 = a.lat * Math.PI/180, lat2 = b.lat * Math.PI/180;
+  const h = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function buildDistMatrix(pts){
+  const n = pts.length;
+  const m = Array.from({length:n}, () => new Array(n).fill(0));
+  for (let i=0;i<n;i++){
+    for (let j=i+1;j<n;j++){
+      const d = haversine(pts[i], pts[j]);
+      m[i][j] = d; m[j][i] = d;
+    }
+  }
+  return m;
+}
+
+function routeLength(order, dm){
+  let total = 0;
+  for (let i=0;i<order.length-1;i++) total += dm[order[i]][order[i+1]];
+  return total;
+}
+
+function nearestNeighborFrom(start, n, dm){
+  const visited = new Array(n).fill(false);
+  const order = [start];
+  visited[start] = true;
+  let current = start;
+  for (let step=1; step<n; step++){
+    let best=-1, bestD=Infinity;
+    for (let j=0;j<n;j++){
+      if (!visited[j] && dm[current][j] < bestD){ bestD = dm[current][j]; best = j; }
+    }
+    order.push(best); visited[best]=true; current=best;
+  }
+  return order;
+}
+
+function twoOpt(order, dm){
+  let improved = true;
+  let best = order.slice();
+  let bestLen = routeLength(best, dm);
+  const n = best.length;
+  let guard = 0;
+  while (improved && guard < 60){
+    improved = false; guard++;
+    for (let i=1;i<n-2;i++){
+      for (let k=i+1;k<n-1;k++){
+        const newRoute = best.slice(0,i).concat(best.slice(i,k+1).reverse(), best.slice(k+1));
+        const newLen = routeLength(newRoute, dm);
+        if (newLen + 1e-9 < bestLen){
+          best = newRoute; bestLen = newLen; improved = true;
+        }
+      }
+    }
+  }
+  return { order: best, length: bestLen };
+}
+
+function computeOptimalRoute(pts){
+  const n = pts.length;
+  const dm = buildDistMatrix(pts);
+  if (n <= 1) return { order: pts.map((_,i)=>i), length: 0 };
+
+  let starts;
+  if (n <= 14) {
+    starts = Array.from({length:n}, (_,i)=>i);
+  } else {
+    const idxs = new Set();
+    idxs.add(0);
+    let minLat=0,maxLat=0,minLng=0,maxLng=0;
+    for (let i=1;i<n;i++){
+      if (pts[i].lat < pts[minLat].lat) minLat=i;
+      if (pts[i].lat > pts[maxLat].lat) maxLat=i;
+      if (pts[i].lng < pts[minLng].lng) minLng=i;
+      if (pts[i].lng > pts[maxLng].lng) maxLng=i;
+    }
+    [minLat,maxLat,minLng,maxLng].forEach(i=>idxs.add(i));
+    while (idxs.size < Math.min(10, n)) idxs.add(Math.floor(Math.random()*n));
+    starts = Array.from(idxs);
+  }
+
+  let bestOrder = null, bestLen = Infinity;
+  for (const s of starts){
+    const nn = nearestNeighborFrom(s, n, dm);
+    const opt = twoOpt(nn, dm);
+    if (opt.length < bestLen){ bestLen = opt.length; bestOrder = opt.order; }
+  }
+  return { order: bestOrder, length: bestLen, dm };
+}
+
+// ---------- Location grouping (for overlapping points) ----------
+function buildGroups(){
+  groups = [];
+  points.forEach((p, idx) => {
+    let found = null;
+    for (const g of groups){
+      if (haversine(g, p) < SAME_LOCATION_KM){ found = g; break; }
+    }
+    if (found){
+      found.indices.push(idx);
+    } else {
+      groups.push({ lat: p.lat, lng: p.lng, indices: [idx] });
+    }
+  });
+}
+
+function groupForIdx(idx){
+  return groups.find(g => g.indices.includes(idx));
+}
+
+// ---------- Parsing (Excel / CSV via SheetJS) ----------
+function findKey(rowKeys, candidates){
+  return rowKeys.find(k => candidates.includes(String(k).trim().toLowerCase()));
+}
+
+function parseWorkbook(arrayBuffer){
+  const wb = XLSX.read(arrayBuffer, { type: 'array' });
+  const sheetName = wb.SheetNames[0];
+  if (!sheetName) throw new Error('No sheet found in the file');
+  const sheet = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  if (!rows.length) throw new Error('No rows found in the first sheet');
+
+  const keys = Object.keys(rows[0]);
+  const latKey = findKey(keys, ['lat','latitude']);
+  const lngKey = findKey(keys, ['lng','lon','long','longitude']);
+  const nameKey = findKey(keys, ['name','point','location','label']);
+  if (!latKey || !lngKey) throw new Error('Could not find lat/lng columns — first row must have headers like name, lat, lng');
+
+  const out = [];
+  rows.forEach((r, i) => {
+    const lat = parseFloat(r[latKey]);
+    const lng = parseFloat(r[lngKey]);
+    if (isNaN(lat) || isNaN(lng)) return;
+    out.push({ name: nameKey && r[nameKey] !== '' ? String(r[nameKey]) : `Point ${i+1}`, lat, lng });
+  });
+  return out;
+}
+
+function loadPoints(parsed){
+  if (!parsed.length){ alert('No valid points found in the file.'); return; }
+  points = parsed.map(p => ({ ...p, visited:false, data:'', savedAt:null }));
+  document.getElementById('headerStat').textContent = `${points.length} points loaded`;
+  runRoute();
+}
+
+// ---------- File handlers ----------
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+document.getElementById('uploadBtn').addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.background = 'var(--amber-soft)'; });
+dropZone.addEventListener('dragleave', () => { dropZone.style.background = ''; });
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.style.background = '';
+  const file = e.dataTransfer.files[0];
+  if (file) readFile(file);
+});
+fileInput.addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) readFile(file);
+});
+function readFile(file){
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const parsed = parseWorkbook(ev.target.result);
+      loadPoints(parsed);
+    } catch (e) {
+      alert('Could not read file: ' + e.message);
+    }
+  };
+  reader.onerror = () => alert('Could not read the selected file.');
+  reader.readAsArrayBuffer(file);
+}
+
+// ---------- Route computation + render ----------
+function runRoute(){
+  if (!points.length) return;
+  const result = computeOptimalRoute(points);
+  route = result.order;
+  buildGroups();
+  renderStops();
+  renderMap();
+  renderSummary(result.length);
+  updateNearestSuggestion();
+}
+
+function renderSummary(totalKm){
+  document.getElementById('summarySection').style.display = 'block';
+  const hrs = totalKm / AVG_SPEED_KMH;
+  const h = Math.floor(hrs), mins = Math.round((hrs - h) * 60);
+  const doneCount = points.filter(p => p.visited).length;
+  document.getElementById('sumStops').textContent = points.length;
+  document.getElementById('sumDist').textContent = totalKm.toFixed(1);
+  document.getElementById('sumTime').textContent = `${h}h ${mins}m`;
+  document.getElementById('sumDone').textContent = `${doneCount}/${points.length}`;
+  document.getElementById('headerStat').textContent = `${points.length} stops · ${totalKm.toFixed(1)} km · ~${h}h ${mins}m · ${doneCount} visited`;
+}
+
+function renderStops(){
+  const container = document.getElementById('stops');
+  container.innerHTML = '';
+  route.forEach((idx, order) => {
+    const p = points[idx];
+    const div = document.createElement('div');
+    div.className = 'stop' + (p.visited ? ' visited' : '');
+    div.dataset.idx = idx;
+    let distFromPrev = '';
+    if (order > 0){
+      const prev = points[route[order-1]];
+      distFromPrev = haversine(prev, p).toFixed(1) + ' km from previous';
+    } else {
+      distFromPrev = 'Suggested starting point';
+    }
+    const dataPreview = p.visited && p.data ? `<div class="data-preview">"${escapeHtml(p.data.slice(0,60))}${p.data.length>60?'…':''}"</div>` : '';
+    div.innerHTML = `
+      <div class="badge">${order+1}</div>
+      <div class="info">
+        <div class="name">${escapeHtml(p.name)}</div>
+        <div class="meta">${distFromPrev} · ${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}</div>
+        ${dataPreview}
+      </div>
+      <div class="actions">
+        <button class="icon-btn dl-btn" title="Download this point's data">&#8595;</button>
+      </div>
+    `;
+    div.querySelector('.info').addEventListener('click', () => {
+      map.flyTo([p.lat, p.lng], 16, { duration: 0.6 });
+      openDataModal(idx);
+    });
+    div.querySelector('.dl-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      downloadPointData(idx);
+    });
+    container.appendChild(div);
+  });
+  const spacer = document.createElement('div');
+  spacer.className = 'list-end-spacer';
+  container.appendChild(spacer);
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderMap(){
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  if (routeLine) map.removeLayer(routeLine);
+
+  const startIdx = route.length ? route[0] : null;
+
+  groups.forEach((g, gi) => {
+    const allVisited = g.indices.every(i => points[i].visited);
+    const isStartGroup = startIdx !== null && g.indices.includes(startIdx);
+    const cls = (allVisited ? 'visited ' : '') + (isStartGroup ? 'start' : '');
+    let html;
+    if (g.indices.length > 1){
+      html = `<div class="pin group ${cls}" style="border-radius:50%;"><span>${g.indices.length}</span></div>`;
+    } else {
+      const order = route.indexOf(g.indices[0]);
+      html = `<div class="pin ${cls}"><span>${order+1}</span></div>`;
+    }
+    const icon = L.divIcon({
+      className: 'leaflet-div-icon',
+      html,
+      iconSize: [26,26], iconAnchor: g.indices.length > 1 ? [13,13] : [13,26]
+    });
+    const popupNames = g.indices.map(i => escapeHtml(points[i].name)).join('<br>');
+    const marker = L.marker([g.lat, g.lng], { icon }).addTo(map)
+      .bindPopup(g.indices.length > 1 ? `<b>${g.indices.length} points here:</b><br>${popupNames}` : `<b>${popupNames}</b>`);
+    marker.on('click', () => {
+      if (g.indices.length > 1){
+        openGroupChooser(g);
+      } else {
+        openDataModal(g.indices[0]);
+      }
+    });
+    markers.push(marker);
+    g.marker = marker;
+  });
+
+  const startFlag = document.getElementById('startFlag');
+  if (startIdx !== null){
+    document.getElementById('startFlagText').textContent = 'Start: ' + points[startIdx].name;
+    startFlag.style.display = 'flex';
+  } else {
+    startFlag.style.display = 'none';
+  }
+
+  const latlngs = route.map(idx => [points[idx].lat, points[idx].lng]);
+  routeLine = L.polyline(latlngs, { color: '#1f5f54', weight: 3, opacity: 0.7, dashArray: '6 6' }).addTo(map);
+
+  if (latlngs.length){
+    map.fitBounds(routeLine.getBounds(), { padding: [40,40] });
+  }
+}
+
+function updateNearestSuggestion(){
+  document.querySelectorAll('.stop').forEach(el => el.classList.remove('next-suggested'));
+  if (nextLine){ map.removeLayer(nextLine); nextLine = null; }
+
+  const unvisited = points.map((p,i)=>({p,i})).filter(o => !o.p.visited);
+  if (!unvisited.length){ renderMap(); return; }
+
+  let refLatLng = userLatLng;
+  let nearest;
+  if (refLatLng){
+    let bestD = Infinity, bestI = null;
+    for (const o of unvisited){
+      const d = haversine({lat:refLatLng[0], lng:refLatLng[1]}, o.p);
+      if (d < bestD){ bestD = d; bestI = o.i; }
+    }
+    nearest = bestI;
+  } else {
+    nearest = unvisited[0].i;
+  }
+
+  renderMap();
+
+  const nearestGroup = groupForIdx(nearest);
+  if (nearestGroup && nearestGroup.marker && !points[nearest].visited){
+    const order = route.indexOf(nearest);
+    const label = nearestGroup.indices.length > 1 ? nearestGroup.indices.length : (order+1);
+    const isStart = route.length && nearestGroup.indices.includes(route[0]);
+    const startCls = isStart ? ' start' : '';
+    nearestGroup.marker.setIcon(L.divIcon({
+      className:'leaflet-div-icon',
+      html: nearestGroup.indices.length > 1
+        ? `<div class="pin group next${startCls}"><span>${label}</span></div>`
+        : `<div class="pin next${startCls}"><span>${label}</span></div>`,
+      iconSize:[26,26], iconAnchor: nearestGroup.indices.length > 1 ? [13,13] : [13,26]
+    }));
+  }
+
+  const stopEl = document.querySelector(`.stop[data-idx="${nearest}"]`);
+  if (stopEl) stopEl.classList.add('next-suggested');
+
+  if (userLatLng){
+    const p = points[nearest];
+    nextLine = L.polyline([userLatLng, [p.lat, p.lng]], { color:'#c97a2b', weight:3, dashArray:'2 8' }).addTo(map);
+  }
+}
+
+// ---------- Group chooser modal ----------
+function openGroupChooser(group){
+  const list = document.getElementById('groupList');
+  list.innerHTML = '';
+  group.indices.forEach(idx => {
+    const p = points[idx];
+    const li = document.createElement('li');
+    li.className = p.visited ? 'gvisited' : '';
+    li.innerHTML = `<span class="gdot"></span><span class="gname">${escapeHtml(p.name)}</span><span class="gstatus">${p.visited ? 'visited' : 'pending'}</span>`;
+    li.addEventListener('click', () => {
+      closeGroupModal();
+      openDataModal(idx);
+    });
+    list.appendChild(li);
+  });
+  document.getElementById('groupOverlay').classList.add('show');
+}
+function closeGroupModal(){
+  document.getElementById('groupOverlay').classList.remove('show');
+}
+document.getElementById('groupModalCancel').addEventListener('click', closeGroupModal);
+document.getElementById('groupOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'groupOverlay') closeGroupModal();
+});
+
+// ---------- Data entry modal ----------
+function openDataModal(idx){
+  activeModalIdx = idx;
+  const p = points[idx];
+  document.getElementById('dataModalTitle').textContent = p.name;
+  document.getElementById('dataModalMeta').textContent = `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}${p.visited ? ' · visited' + (p.savedAt ? ' on ' + new Date(p.savedAt).toLocaleString() : '') : ' · not yet visited'}`;
+  document.getElementById('dataModalText').value = p.data || '';
+  document.getElementById('dataModalUnvisit').style.display = p.visited ? 'inline-block' : 'none';
+  document.getElementById('dataModalSave').textContent = p.visited ? 'Update data' : 'Save & mark visited';
+  document.getElementById('dataOverlay').classList.add('show');
+}
+function closeDataModal(){
+  document.getElementById('dataOverlay').classList.remove('show');
+  activeModalIdx = null;
+}
+document.getElementById('dataModalCancel').addEventListener('click', closeDataModal);
+document.getElementById('dataOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'dataOverlay') closeDataModal();
+});
+document.getElementById('dataModalSave').addEventListener('click', () => {
+  if (activeModalIdx === null) return;
+  const p = points[activeModalIdx];
+  p.data = document.getElementById('dataModalText').value;
+  p.visited = true;
+  p.savedAt = new Date().toISOString();
+  closeDataModal();
+  renderStops(); updateNearestSuggestion();
+  const dm = buildDistMatrix(points);
+  renderSummary(routeLength(route, dm));
+});
+document.getElementById('dataModalUnvisit').addEventListener('click', () => {
+  if (activeModalIdx === null) return;
+  const p = points[activeModalIdx];
+  p.visited = false;
+  closeDataModal();
+  renderStops(); updateNearestSuggestion();
+  const dm = buildDistMatrix(points);
+  renderSummary(routeLength(route, dm));
+});
+
+// ---------- Downloads ----------
+function csvEscape(v){
+  const s = String(v ?? '');
+  if (/[",\n]/.test(s)) return '"' + s.replace(/"/g,'""') + '"';
+  return s;
+}
+function triggerDownload(filename, content){
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function downloadPointData(idx){
+  const p = points[idx];
+  const header = 'name,lat,lng,visited,data,saved_at\n';
+  const row = [p.name, p.lat, p.lng, p.visited, p.data || '', p.savedAt || ''].map(csvEscape).join(',');
+  const safeName = p.name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'') || 'point';
+  triggerDownload(`${safeName}.csv`, header + row + '\n');
+}
+document.getElementById('downloadAllBtn').addEventListener('click', () => {
+  const header = 'order,name,lat,lng,visited,data,saved_at\n';
+  const rows = route.map((idx, order) => {
+    const p = points[idx];
+    return [order+1, p.name, p.lat, p.lng, p.visited, p.data || '', p.savedAt || ''].map(csvEscape).join(',');
+  });
+  triggerDownload('waypoint-run-data.csv', header + rows.join('\n') + '\n');
+});
+</script>
+</body>
+</html>
