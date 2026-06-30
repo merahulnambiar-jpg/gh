@@ -369,8 +369,12 @@ let userLatLng = null;
 let activeModalIdx = null;
 let map;
 
+let roadRoute = null;        // { coordinates:[[lat,lng]...], totalDistance(m), totalDuration(s), legs:[{distance,duration}] } or null
+let routingSource = 'none';  // 'road' | 'road-network-estimate' | 'straight-line'
+
 const SAME_LOCATION_KM = 0.05; // ~50m threshold to treat points as "same location"
-const AVG_SPEED_KMH = 35;      // used for estimated travel time
+const AVG_SPEED_KMH = 35;      // used for estimated travel time when no road data is available
+const OSRM_FOOT_BASE = 'https://routing.openstreetmap.de/routed-foot';
 
 // ---------- Map init ----------
 map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
@@ -427,6 +431,47 @@ function buildDistMatrix(pts){
   return m;
 }
 
+// ---------- Real road routing (OSRM, walking profile) ----------
+function fetchWithTimeout(url, ms){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms || 12000);
+  return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
+// Fetch a full point-to-point walking-time/distance matrix from the road network.
+// Used so the visiting ORDER itself is chosen by real travel time, not straight-line distance.
+async function fetchRoadMatrix(pts){
+  const coordStr = pts.map(p => `${p.lng},${p.lat}`).join(';');
+  const url = `${OSRM_FOOT_BASE}/table/v1/foot/${coordStr}?annotations=duration,distance`;
+  const res = await fetchWithTimeout(url, 15000);
+  if (!res.ok) throw new Error('Routing table request failed (' + res.status + ')');
+  const data = await res.json();
+  if (data.code !== 'Ok') throw new Error('Routing table: ' + data.code);
+  return { durations: data.durations, distances: data.distances };
+}
+
+// Fetch the actual walkable path (turn-by-turn road geometry) through points in a given order.
+async function fetchRoadRoute(orderedPts){
+  const coordStr = orderedPts.map(p => `${p.lng},${p.lat}`).join(';');
+  const url = `${OSRM_FOOT_BASE}/route/v1/foot/${coordStr}?overview=full&geometries=geojson&steps=false`;
+  const res = await fetchWithTimeout(url, 15000);
+  if (!res.ok) throw new Error('Route request failed (' + res.status + ')');
+  const data = await res.json();
+  if (data.code !== 'Ok' || !data.routes || !data.routes.length) throw new Error('Route: ' + data.code);
+  const r = data.routes[0];
+  return {
+    coordinates: r.geometry.coordinates.map(c => [c[1], c[0]]), // -> [lat,lng]
+    totalDistance: r.distance, // meters
+    totalDuration: r.duration, // seconds
+    legs: r.legs.map(l => ({ distance: l.distance, duration: l.duration })) // one per consecutive waypoint pair
+  };
+}
+
+function routingStatus(msg){
+  const el = document.getElementById('headerStat');
+  if (msg) el.textContent = msg;
+}
+
 function routeLength(order, dm){
   let total = 0;
   for (let i=0;i<order.length-1;i++) total += dm[order[i]][order[i+1]];
@@ -469,10 +514,10 @@ function twoOpt(order, dm){
   return { order: best, length: bestLen };
 }
 
-function computeOptimalRoute(pts){
+function computeOptimalRoute(pts, providedDm){
   const n = pts.length;
-  const dm = buildDistMatrix(pts);
-  if (n <= 1) return { order: pts.map((_,i)=>i), length: 0 };
+  const dm = providedDm || buildDistMatrix(pts);
+  if (n <= 1) return { order: pts.map((_,i)=>i), length: 0, dm };
 
   let starts;
   if (n <= 14) {
@@ -587,23 +632,87 @@ function readFile(file){
 }
 
 // ---------- Route computation + render ----------
-function runRoute(){
+async function runRoute(){
   if (!points.length) return;
-  const result = computeOptimalRoute(points);
+  roadRoute = null;
+  routingSource = 'none';
+
+  routingStatus('Finding road routes…');
+
+  // Step 1: try to get a real walking-time matrix from the road network to choose the visiting order.
+  let dm = null;
+  let roadDistances = null;
+  try {
+    const tbl = await fetchRoadMatrix(points);
+    dm = tbl.durations.map(row => row.map(v => (v === null || v === undefined) ? Infinity : v));
+    roadDistances = tbl.distances;
+    routingSource = 'road-network-estimate';
+  } catch (e) {
+    console.warn('Road matrix unavailable, falling back to straight-line distances:', e.message);
+    dm = buildDistMatrix(points);
+    routingSource = 'straight-line';
+  }
+
+  const result = computeOptimalRoute(points, dm);
   route = result.order;
   buildGroups();
   renderStops();
   renderMap(true);
-  renderSummary(result.length);
+  renderSummary(result.length, roadDistances);
+  updateNearestSuggestion();
+
+  // Step 2: try to fetch the actual walkable path through the chosen order, to draw on the map.
+  if (route.length > 1) {
+    routingStatus('Tracing the walking route…');
+    try {
+      const orderedPts = route.map(idx => points[idx]);
+      roadRoute = await fetchRoadRoute(orderedPts);
+      routingSource = 'road';
+      renderMap(false);
+      renderStops();
+      renderSummary(result.length, roadDistances);
+    } catch (e) {
+      console.warn('Road route geometry unavailable, showing straight-line path:', e.message);
+      if (routingSource !== 'road') routingSource = routingSource === 'none' ? 'straight-line' : routingSource;
+      updateHeaderStatText();
+    }
+  }
   updateNearestSuggestion();
 }
 
-function renderSummary(totalKm){
-  const hrs = totalKm / AVG_SPEED_KMH;
+let lastTotalKm = 0, lastTotalSeconds = 0, lastRoutingLabel = '';
+
+function renderSummary(matrixCostTotal, roadDistances){
+  let totalKm, totalSeconds, label;
+
+  if (roadRoute){
+    totalKm = roadRoute.totalDistance / 1000;
+    totalSeconds = roadRoute.totalDuration;
+    label = 'walking route';
+  } else if (routingSource === 'road-network-estimate' && roadDistances){
+    let sumM = 0;
+    for (let i=0;i<route.length-1;i++) sumM += roadDistances[route[i]][route[i+1]];
+    totalKm = sumM / 1000;
+    totalSeconds = matrixCostTotal; // dm was durations in seconds in this mode
+    label = 'road estimate';
+  } else {
+    totalKm = matrixCostTotal; // dm was straight-line km in this mode
+    totalSeconds = (totalKm / AVG_SPEED_KMH) * 3600;
+    label = 'straight-line — road routing unavailable';
+  }
+
+  lastTotalKm = totalKm;
+  lastTotalSeconds = totalSeconds;
+  lastRoutingLabel = label;
+  updateHeaderStatText();
+  document.getElementById('downloadAllBtn').style.display = 'inline-block';
+}
+
+function updateHeaderStatText(){
+  const hrs = lastTotalSeconds / 3600;
   const h = Math.floor(hrs), mins = Math.round((hrs - h) * 60);
   const doneCount = points.filter(p => p.visited).length;
-  document.getElementById('headerStat').textContent = `${points.length} stops · ${totalKm.toFixed(1)} km · ~${h}h ${mins}m · ${doneCount} visited`;
-  document.getElementById('downloadAllBtn').style.display = 'inline-block';
+  document.getElementById('headerStat').textContent = `${points.length} stops · ${lastTotalKm.toFixed(1)} km · ~${h}h ${mins}m · ${doneCount} visited · ${lastRoutingLabel}`;
 }
 
 function renderStops(){
@@ -616,8 +725,14 @@ function renderStops(){
     div.dataset.idx = idx;
     let distFromPrev = '';
     if (order > 0){
-      const prev = points[route[order-1]];
-      distFromPrev = haversine(prev, p).toFixed(1) + ' km from previous';
+      if (roadRoute && roadRoute.legs[order-1]){
+        const leg = roadRoute.legs[order-1];
+        const mins = Math.round(leg.duration / 60);
+        distFromPrev = `${(leg.distance/1000).toFixed(1)} km · ~${mins} min walk`;
+      } else {
+        const prev = points[route[order-1]];
+        distFromPrev = haversine(prev, p).toFixed(1) + ' km from previous (straight-line)';
+      }
     } else {
       distFromPrev = 'Suggested starting point';
     }
@@ -698,7 +813,11 @@ function renderMap(fitToRoute){
   }
 
   const latlngs = route.map(idx => [points[idx].lat, points[idx].lng]);
-  routeLine = L.polyline(latlngs, { color: '#1f5f54', weight: 3, opacity: 0.7, dashArray: '6 6' }).addTo(map);
+  if (roadRoute && roadRoute.coordinates.length){
+    routeLine = L.polyline(roadRoute.coordinates, { color: '#1f5f54', weight: 4, opacity: 0.85 }).addTo(map);
+  } else {
+    routeLine = L.polyline(latlngs, { color: '#1f5f54', weight: 3, opacity: 0.55, dashArray: '6 6' }).addTo(map);
+  }
 
   if (latlngs.length && fitToRoute){
     map.fitBounds(routeLine.getBounds(), { padding: [40,40] });
@@ -803,8 +922,7 @@ document.getElementById('dataModalSave').addEventListener('click', () => {
   p.savedAt = new Date().toISOString();
   closeDataModal();
   renderStops(); updateNearestSuggestion();
-  const dm = buildDistMatrix(points);
-  renderSummary(routeLength(route, dm));
+  updateHeaderStatText();
 });
 document.getElementById('dataModalUnvisit').addEventListener('click', () => {
   if (activeModalIdx === null) return;
@@ -812,8 +930,7 @@ document.getElementById('dataModalUnvisit').addEventListener('click', () => {
   p.visited = false;
   closeDataModal();
   renderStops(); updateNearestSuggestion();
-  const dm = buildDistMatrix(points);
-  renderSummary(routeLength(route, dm));
+  updateHeaderStatText();
 });
 
 // ---------- Downloads ----------
